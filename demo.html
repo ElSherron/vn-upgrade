@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Game Voice Chat Demo</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 420px; margin: 24px auto; padding: 0 16px; }
+  button, select, input { font-size: 16px; padding: 10px 14px; border-radius: 8px; border: 1px solid #ccc; }
+  button { background: #3b82f6; color: #fff; border: none; touch-action: none; user-select: none; -webkit-user-select: none; }
+  button.off { background: #9ca3af; }
+  #ptt { width: 100%; height: 90px; font-size: 20px; margin: 12px 0; }
+  #ptt.live { background: #ef4444; }
+  .row { display: flex; gap: 8px; margin-bottom: 8px; }
+  .row > * { flex: 1; }
+  #meter { height: 8px; background: #e5e7eb; border-radius: 4px; overflow: hidden; margin-bottom: 12px; }
+  #meterFill { height: 100%; width: 0; background: #10b981; }
+  .peer { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; margin-bottom: 6px; background: #f3f4f6; }
+  .peer.speaking { background: #d1fae5; }
+  .peer .name { flex: 1; }
+  .peer input[type=range] { padding: 0; width: 90px; }
+  .peer button { padding: 6px 10px; font-size: 14px; }
+</style>
+</head>
+<body>
+  <h2>Voice Chat</h2>
+
+  <div id="setup">
+    <div class="row"><input id="name" placeholder="Your name" value="Player" />
+                     <input id="room" placeholder="Room" value="lobby" /></div>
+    <button id="join" style="width:100%">Join voice chat</button>
+  </div>
+
+  <div id="controls" style="display:none">
+    <div class="row">
+      <select id="mode">
+        <option value="ptt">Push-to-talk (hold button or Space)</option>
+        <option value="open">Open mic (auto-detect voice)</option>
+      </select>
+    </div>
+    <div class="row">
+      <button id="mute">Mute mic</button>
+      <button id="deafen">Deafen</button>
+    </div>
+    <button id="ptt">Hold to talk</button>
+    <div id="meter"><div id="meterFill"></div></div>
+    <h3>Players</h3>
+    <div id="peers"></div>
+  </div>
+  <div id="status"></div>
+
+<script src="voicechat.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+let voice;
+
+$("join").onclick = async () => {
+  voice = new VoiceChat({
+    url: "ws://localhost:8080",        // change to your server (wss:// on HTTPS)
+    room: $("room").value || "lobby",
+    name: $("name").value || "Player",
+  });
+
+  voice.on("speaking", (id, on) => {
+    if (id === voice.id) $("ptt").classList.toggle("live", on);
+    renderPeers();
+  });
+  voice.on("joined", renderPeers).on("peerJoin", renderPeers).on("peerLeave", renderPeers);
+  voice.on("disconnected", () => ($("status").textContent = "Disconnected. Reconnecting..."));
+  voice.on("error", (m) => ($("status").textContent = m));
+
+  try {
+    await voice.join();
+    $("setup").style.display = "none";
+    $("controls").style.display = "block";
+    $("status").textContent = "Connected to room: " + voice.opts.room;
+    requestAnimationFrame(updateMeter);
+  } catch (e) { /* error already shown via the "error" event */ }
+};
+
+// Push-to-talk button + Space bar
+const ptt = $("ptt");
+ptt.addEventListener("pointerdown", (e) => { ptt.setPointerCapture(e.pointerId); voice.startTalking(); });
+ptt.addEventListener("pointerup", () => voice.stopTalking());
+ptt.addEventListener("pointercancel", () => voice.stopTalking());
+ptt.addEventListener("contextmenu", (e) => e.preventDefault());
+window.addEventListener("keydown", (e) => { if (e.code === "Space" && !e.repeat && voice && voice.id) { e.preventDefault(); voice.startTalking(); } });
+window.addEventListener("keyup", (e) => { if (e.code === "Space" && voice) voice.stopTalking(); });
+window.addEventListener("blur", () => voice && voice.stopTalking());
+
+$("mode").onchange = (e) => { voice.setMode(e.target.value); ptt.style.display = e.target.value === "ptt" ? "block" : "none"; };
+$("mute").onclick = () => { voice.setMuted(!voice.muted); $("mute").textContent = voice.muted ? "Unmute mic" : "Mute mic"; $("mute").classList.toggle("off", voice.muted); };
+$("deafen").onclick = () => { voice.setDeafened(!voice.deafened); $("deafen").textContent = voice.deafened ? "Undeafen" : "Deafen"; $("deafen").classList.toggle("off", voice.deafened); };
+
+function updateMeter() {
+  $("meterFill").style.width = Math.min(100, voice.level * 400) + "%";
+  requestAnimationFrame(updateMeter);
+}
+
+function renderPeers() {
+  const box = $("peers");
+  box.innerHTML = "";
+  const peers = voice.getPeers();
+  if (!peers.length) box.textContent = "Waiting for other players...";
+  peers.forEach((p) => {
+    const row = document.createElement("div");
+    row.className = "peer" + (p.speaking ? " speaking" : "");
+    row.innerHTML = '<span class="name"></span><input type="range" min="0" max="1" step="0.05"><button></button>';
+    row.querySelector(".name").textContent = (p.speaking ? "🔊 " : "") + p.name;
+    const slider = row.querySelector("input");
+    slider.value = p.volume;
+    slider.oninput = () => voice.setPeerVolume(p.id, +slider.value);
+    const btn = row.querySelector("button");
+    btn.textContent = p.muted ? "Unmute" : "Mute";
+    btn.classList.toggle("off", p.muted);
+    btn.onclick = () => { voice.setPeerMuted(p.id, !p.muted); renderPeers(); };
+    box.appendChild(row);
+  });
+}
+</script>
+</body>
+</html>
